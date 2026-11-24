@@ -1,0 +1,845 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1"><style>:root{color-scheme:light}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#fff;color:#000}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Stockfish Hand und Brain</title>
+<link rel="artifact-thumbnail" href="thumb.png">
+<link rel="icon" type="image/svg+xml" href="icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600..800&family=Hanken+Grotesk:wght@400;500;700&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+Symbols+2&display=swap">
+<style>
+/* Layout: das Handy liegt neben dem Brett, Weiß sitzt am unteren, Schwarz am oberen Ende.
+   Zwei Hälften, die obere um 180° gedreht, getrennt durch einen Brettrand aus Feldern.
+   Bewusst einseitig: das Orakel-Rot gehört allein der Figur, die das Brain ansagt.
+   Seite Weiß: helles Elfenbein. Seite Schwarz: tiefe Nacht. Ein Thema, bewusst nicht umschaltbar. */
+:root {
+  --w-bg: #eef1f4;
+  --w-ink: #0f1d2a;
+  --w-soft: #5a6b7b;
+  --w-line: #cdd6de;
+  --w-btn: #0f1d2a;
+  --w-btn-ink: #eef1f4;
+  --b-bg: #0c1620;
+  --b-ink: #e9eff5;
+  --b-soft: #8fa3b6;
+  --b-line: #253648;
+  --b-btn: #e9eff5;
+  --b-btn-ink: #0c1620;
+  --oracle: #ee4a22;
+  --hit: #0f8a63;
+  --miss: #b35a1f;
+  --seam-l: #e3e9ef;
+  --seam-d: #7f97b0;
+  --f-display: "Bricolage Grotesque", "Segoe UI", system-ui, sans-serif;
+  --f-body: "Hanken Grotesk", "Segoe UI", system-ui, sans-serif;
+  --f-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+  --f-piece: "Noto Sans Symbols 2", "Segoe UI Symbol", "Apple Symbols", "DejaVu Sans", sans-serif;
+  color-scheme: light;
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--w-bg); font-family: var(--f-body); font-size: 16px; line-height: 1.4; -webkit-text-size-adjust: 100%; -webkit-tap-highlight-color: transparent; }
+button { font: inherit; color: inherit; cursor: pointer; }
+:focus-visible { outline: 3px solid var(--oracle); outline-offset: 2px; }
+
+.app {
+  height: 100%;
+  min-height: 640px;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) 52px minmax(0, 1fr);
+}
+
+/* Hälften */
+.half {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 14px 18px 14px;
+  overflow: hidden;
+  --ink: var(--w-ink); --soft: var(--w-soft); --line: var(--w-line); --btn: var(--w-btn); --btn-ink: var(--w-btn-ink);
+  background: var(--w-bg); color: var(--ink);
+}
+.half.black {
+  --ink: var(--b-ink); --soft: var(--b-soft); --line: var(--b-line); --btn: var(--b-btn); --btn-ink: var(--b-btn-ink);
+  background: var(--b-bg);
+  transform: rotate(180deg);
+}
+.hhead { display: flex; justify-content: space-between; align-items: center; font-size: 14px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; color: var(--soft); }
+.who { display: flex; align-items: center; gap: 8px; }
+.dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--ink); display: inline-block; }
+.dot.w { background: #fff; }
+.dot.b { background: #0c1620; border-color: #8fa3b6; }
+.half.black .dot.w { border-color: #e9eff5; }
+.score b { color: var(--ink); font-family: var(--f-display); font-size: 16px; }
+
+.stage {
+  flex: 1; min-height: 0;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px;
+  text-align: center;
+  background: radial-gradient(circle at 50% 42%, color-mix(in srgb, var(--oracle) 17%, transparent), transparent 64%);
+}
+.plabel { font-size: 12px; font-weight: 700; letter-spacing: .16em; text-transform: uppercase; color: var(--soft); }
+.glyph { height: min(25vh, 52vw); aspect-ratio: 1; display: block; max-height: 100%; }
+.glyph.stamp { animation: stamp .45s cubic-bezier(.2, .9, .3, 1.25); }
+@keyframes stamp { from { transform: scale(.6) rotate(-8deg); opacity: 0; } to { transform: none; opacity: 1; } }
+.bigpc { font-family: var(--f-piece); font-size: 92px; text-anchor: middle; dominant-baseline: central; fill: var(--oracle); paint-order: stroke fill; stroke-linejoin: round; stroke-width: 2.4; stroke: var(--w-ink); }
+.half.black .bigpc { stroke: #f3f6f9; stroke-width: 1.8; }
+.pname { font-family: var(--f-display); font-weight: 800; text-transform: uppercase; letter-spacing: .14em; font-size: clamp(28px, 5.6vh, 44px); line-height: 1; padding-left: .14em; }
+
+.cta {
+  flex: none; width: 100%; min-height: 56px; border: 0; border-radius: 14px;
+  background: var(--btn); color: var(--btn-ink); font-weight: 700; font-size: 18px;
+}
+.cta:active { transform: translateY(1px); }
+.cta.ghost { background: transparent; color: var(--ink); border: 2px solid var(--line); }
+
+/* Warten */
+.wait { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; text-align: center; }
+.wait .big { font-family: var(--f-display); font-weight: 800; font-size: clamp(24px, 4.6vh, 34px); letter-spacing: -.01em; line-height: 1.1; }
+.wait .sub { color: var(--soft); font-size: 15px; }
+.mini { display: inline-flex; align-items: center; gap: 8px; padding: 6px 14px 6px 8px; border: 1.5px solid var(--line); border-radius: 999px; font-weight: 700; font-size: 15px; }
+.mini svg { width: 30px; height: 30px; display: block; }
+.mini svg .bigpc { stroke-width: 3; }
+.reveal { width: 100%; max-width: 340px; border-radius: 14px; padding: 10px 14px; border: 1.5px solid var(--line); text-align: left; }
+.reveal .rt { font-weight: 700; font-size: 16px; }
+.reveal.hit .rt { color: var(--hit); }
+.half.black .reveal.hit .rt { color: #3fcc9d; }
+.reveal.miss .rt { color: var(--miss); }
+.half.black .reveal.miss .rt { color: #f2a560; }
+.reveal .rs { font-size: 14px; color: var(--soft); }
+.reveal code, .san { font-family: var(--f-mono); font-weight: 500; }
+.dots { display: flex; gap: 7px; height: 20px; align-items: center; }
+.dots b { width: 11px; height: 11px; border-radius: 50%; background: var(--ink); animation: blink 1s infinite ease-in-out; }
+.dots b:nth-child(2) { animation-delay: .15s; }
+.dots b:nth-child(3) { animation-delay: .3s; }
+@keyframes blink { 0%, 100% { opacity: .2; } 50% { opacity: 1; } }
+
+/* Zugeingabe */
+.entry { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 10px; }
+.ehead { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.ehead .mini { padding: 4px 12px 4px 6px; }
+.ehead .mini svg { width: 26px; height: 26px; }
+.back { min-height: 40px; padding: 0 14px; border: 1.5px solid var(--line); border-radius: 10px; background: transparent; font-weight: 700; font-size: 14px; }
+.elabel { font-size: 14px; color: var(--soft); font-weight: 500; }
+.elabel b { color: var(--ink); font-family: var(--f-mono); }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; align-content: flex-start; overflow-y: auto; min-height: 0; padding-bottom: 4px; }
+.chip {
+  min-width: 62px; min-height: 52px; padding: 0 14px; border-radius: 12px;
+  border: 2px solid var(--line); background: transparent; color: var(--ink);
+  font-family: var(--f-mono); font-weight: 500; font-size: 20px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+}
+.chip small { font-family: var(--f-body); font-size: 12px; color: var(--soft); font-weight: 700; }
+.chip:active { background: var(--btn); color: var(--btn-ink); border-color: var(--btn); }
+.chip.pg { font-family: var(--f-body); font-weight: 700; font-size: 16px; }
+.chip.pg span { font-family: var(--f-piece); font-size: 28px; line-height: 1; }
+
+/* Brettrand */
+.seam {
+  display: grid; place-items: center;
+  background: repeating-conic-gradient(var(--seam-l) 0 25%, var(--seam-d) 0 50%) 0 0 / 52px 52px;
+}
+.seam button {
+  min-height: 38px; padding: 0 20px; border-radius: 999px; border: 0;
+  background: var(--w-btn); color: var(--w-btn-ink); font-weight: 700; font-size: 15px; letter-spacing: .04em;
+  box-shadow: 0 0 0 4px var(--w-bg);
+}
+
+/* Ergebnis */
+.over .big { font-size: clamp(34px, 7vh, 52px); }
+.over .res { font-family: var(--f-display); font-weight: 800; font-size: 22px; color: var(--oracle); }
+
+/* Menü */
+.sheet { position: fixed; inset: 0; background: rgba(8, 14, 20, .6); display: flex; align-items: flex-end; justify-content: center; z-index: 10; }
+.sheet[hidden] { display: none; }
+.panel {
+  width: 100%; max-width: 560px; max-height: 92%; overflow-y: auto;
+  background: var(--w-bg); color: var(--w-ink);
+  border-radius: 18px 18px 0 0; padding: 16px 18px 28px;
+}
+.panel header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+.panel h2 { margin: 0; font-family: var(--f-display); font-weight: 800; font-size: 24px; }
+.panel h3 { margin: 18px 0 8px; font-size: 13px; letter-spacing: .08em; text-transform: uppercase; color: var(--w-soft); }
+.panel .close { min-height: 40px; padding: 0 16px; border-radius: 10px; border: 1.5px solid var(--w-line); background: transparent; font-weight: 700; }
+.pbtns { display: grid; gap: 8px; }
+.pbtn { min-height: 48px; border-radius: 12px; border: 1.5px solid var(--w-line); background: transparent; font-weight: 700; font-size: 16px; text-align: left; padding: 0 14px; }
+.pbtn[disabled] { opacity: .4; cursor: default; }
+.pbtn.danger { color: var(--oracle); }
+.seg { display: flex; border: 1.5px solid var(--w-line); border-radius: 12px; overflow: hidden; }
+.seg button { flex: 1; min-height: 44px; border: 0; border-left: 1.5px solid var(--w-line); background: transparent; font-size: 14px; font-weight: 500; }
+.seg button:first-child { border-left: 0; }
+.seg button[aria-pressed="true"] { background: var(--w-ink); color: var(--w-bg); font-weight: 700; }
+.mrow { display: grid; grid-template-columns: 30px 1fr 1fr; gap: 8px; padding: 6px 0; border-top: 1px solid var(--w-line); }
+.mrow:first-child { border-top: 0; }
+.mrow .no { color: var(--w-soft); font-family: var(--f-mono); font-size: 13px; padding-top: 2px; }
+.mv .san { font-size: 15px; }
+.mv .tag { display: block; font-size: 12px; line-height: 1.25; }
+.tag.hit { color: var(--hit); font-weight: 700; }
+.tag.miss { color: var(--miss); font-family: var(--f-mono); }
+.none { margin: 0; color: var(--w-soft); font-size: 14px; }
+.credit { margin: 18px 0 0; font-size: 12px; color: var(--w-soft); }
+.credit a { color: inherit; }
+.bwrap { width: 100%; aspect-ratio: 1; border-radius: 8px; overflow: hidden; }
+.bwrap svg { width: 100%; height: 100%; display: block; }
+.bwrap .l { fill: #e3e9f0; } .bwrap .d { fill: #8aa1b9; }
+.bwrap .last { fill: rgba(255, 196, 40, .45); }
+.bwrap .coord { font-family: var(--f-body); font-size: .2px; font-weight: 700; }
+.bwrap .coord.on-l { fill: #8aa1b9; } .bwrap .coord.on-d { fill: #e3e9f0; }
+.pc { font-family: var(--f-piece); text-anchor: middle; dominant-baseline: central; paint-order: stroke fill; stroke-linejoin: round; }
+.pc.w { fill: #fff; stroke: #14202d; stroke-width: .05; }
+.pc.b { fill: #131d28; stroke: #131d28; stroke-width: .03; }
+.hintp { font-size: 13px; color: var(--w-soft); margin: 8px 0 0; }
+
+/* Bewertungsbalken: Weiß wächst von unten (Seite Weiß), Schwarz von oben (Seite Schwarz) */
+.evalbar { position: fixed; left: 0; top: 0; bottom: 0; width: 16px; background: #131d28; border-right: 2px solid #7f97b0; z-index: 5; overflow: hidden; }
+.evalbar[hidden] { display: none; }
+.evalbar .ew, .evmini .ew { position: absolute; left: 0; right: 0; bottom: 0; height: 50%; background: #f4f7fa; transition: height .5s cubic-bezier(.3, .8, .3, 1); }
+.evalbar .mid { position: absolute; left: 0; right: 0; top: 50%; height: 2px; margin-top: -1px; background: var(--oracle); opacity: .75; }
+.app.with-eval { padding-left: 16px; }
+.score { display: flex; align-items: center; gap: 12px; }
+.ev { font-family: var(--f-mono); font-weight: 500; font-size: 14px; letter-spacing: 0; text-transform: none; color: var(--ink); padding: 2px 8px; border: 1.5px solid var(--line); border-radius: 8px; }
+.bflex { display: flex; gap: 8px; align-items: stretch; }
+.bflex .bwrap { flex: 1; min-width: 0; }
+.evmini { position: relative; width: 18px; border-radius: 6px; overflow: hidden; background: #131d28; }
+.evmini.flip .ew { bottom: auto; top: 0; }
+.evalbar.stale .ew, .ev.stale { opacity: .55; }
+.evcap { margin: 8px 0 0; font-family: var(--f-mono); font-size: 14px; color: var(--w-ink); }
+
+@media (prefers-reduced-motion: reduce) { .glyph.stamp, .dots b { animation: none; } .evalbar .ew, .evmini .ew { transition: none; } }
+
+/* Varianten */
+.pips { display: inline-flex; gap: 4px; margin-left: 10px; }
+.pips i { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--soft); font-style: normal; font-size: 13px; line-height: 14px; text-align: center; color: transparent; font-weight: 800; letter-spacing: 0; }
+.pips i.on { background: var(--oracle); border-color: var(--oracle); color: #fff; }
+.seg button.warn { color: var(--oracle); font-weight: 700; }
+.wait { justify-content: flex-start; overflow-y: auto; gap: 10px; }
+.wait > :first-child { margin-top: auto; }
+.wait > :last-child { margin-bottom: auto; }
+.over .big { font-size: clamp(28px, 5vh, 46px); }
+</style>
+</head>
+<body>
+<main class="app" id="app">
+  <section class="half black" id="hb" aria-label="Schwarz"></section>
+  <div class="seam"><button type="button" data-act="menu" id="btnMenu">Menü</button></div>
+  <section class="half white" id="hw" aria-label="Weiß"></section>
+</main>
+<div class="evalbar" id="evalbar" role="img" aria-label="Bewertung" hidden><div class="ew" id="evalW"></div><div class="mid"></div></div>
+<div class="sheet" id="sheet" hidden></div>
+
+<script src="chessops.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  /* ---------- Konstanten ---------- */
+  var GLYPH = { k: '♚', q: '♛', r: '♜', b: '♝', n: '♞', p: '♟︎' };
+  var NAME = { k: 'König', q: 'Dame', r: 'Turm', b: 'Läufer', n: 'Springer', p: 'Bauer' };
+  var ROLE = { pawn: 'p', knight: 'n', bishop: 'b', rook: 'r', queen: 'q', king: 'k' };
+  var PROMO_ROLES = ['queen', 'rook', 'bishop', 'knight'];
+  var SAN_LETTER = { K: 'K', Q: 'D', R: 'T', B: 'L', N: 'S' };
+  var FILES = 'abcdefgh';
+  var VARIANTS = {
+    chess: { label: 'Klassisch', tag: '', engine: 'classic',
+      hint: 'Normales Schach.' },
+    atomic: { label: 'Atomic', tag: 'Atomic', engine: 'mv',
+      hint: 'Jedes Schlagen löst eine Explosion aus: Die schlagende Figur und alle Nicht-Bauern auf den Nachbarfeldern verschwinden. Wer den gegnerischen König in die Luft jagt, gewinnt. Könige dürfen nicht schlagen.' },
+    '3check': { label: 'Dreischach', tag: '3+', engine: 'mv',
+      hint: 'Wer dem Gegner dreimal Schach bietet, gewinnt sofort. Schachmatt gewinnt natürlich auch.' }
+  };
+  var VORDER = ['chess', 'atomic', '3check'];
+  var ENGINES = {
+    classic: ['stockfish-19-lite-single.js', 'stockfish-19-asm.js'],
+    mv: ['mv/stockfish.wasm.js', 'mv/stockfish.js']
+  };
+  var Ops = window.Ops;
+
+  function sanDe(san) {
+    if (!san) return '';
+    return san.replace(/^[KQRBN]/, function (c) { return SAN_LETTER[c]; })
+              .replace(/=([QRBN])/, function (_, c) { return '=' + SAN_LETTER[c]; });
+  }
+  function fmt(cp) { return (cp / 100).toFixed(2).replace('.', ','); }
+  function clampCp(e) {
+    if (e.mate != null) return e.mate > 0 ? 1000 : -1000;
+    return Math.max(-1000, Math.min(1000, e.cp || 0));
+  }
+  function $(id) { return document.getElementById(id); }
+  function esc(t) { return String(t).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function colorName(c) { return c === 'w' ? 'Weiß' : 'Schwarz'; }
+
+  /* ---------- Regeln (chessops) ---------- */
+  function turnOf(pos) { return pos.turn === 'white' ? 'w' : 'b'; }
+  function pieceAt(pos, name) {
+    var p = pos.board.get(Ops.parseSquare(name));
+    return p ? { type: ROLE[p.role], color: p.color === 'white' ? 'w' : 'b' } : null;
+  }
+  function posKey(pos) { return Ops.makeFen(pos.toSetup()).split(' ').slice(0, -2).join(' '); }
+
+  // Alle legalen Züge mit UCI in Standardschreibweise (Rochade als e1g1)
+  function legalMoves(pos) {
+    var out = [];
+    pos.allDests().forEach(function (set, from) {
+      var pc = pos.board.get(from);
+      if (!pc) return;
+      var fromN = Ops.makeSquare(from);
+      for (var it = set[Symbol.iterator](), r = it.next(); !r.done; r = it.next()) {
+        var to = r.value, toN = Ops.makeSquare(to), target = pos.board.get(to);
+        if (pc.role === 'king' && target && target.color === pc.color && target.role === 'rook') {
+          var disp = (to > from ? 'g' : 'c') + fromN[1];
+          out.push({ from: fromN, to: disp, uci: fromN + disp, type: 'k', castle: true, move: { from: from, to: to } });
+          continue;
+        }
+        var ep = pc.role === 'pawn' && !target && fromN[0] !== toN[0];
+        var base = { from: fromN, to: toN, type: ROLE[pc.role], capture: !!target || ep, ep: ep };
+        if (pc.role === 'pawn' && (toN[1] === '8' || toN[1] === '1')) {
+          PROMO_ROLES.forEach(function (pr) {
+            out.push(Object.assign({}, base, { uci: fromN + toN + ROLE[pr], promotion: ROLE[pr], move: { from: from, to: to, promotion: pr } }));
+          });
+        } else {
+          out.push(Object.assign({}, base, { uci: fromN + toN, move: { from: from, to: to } }));
+        }
+      }
+    });
+    return out;
+  }
+  function checksGiven(pos, c) {
+    if (!pos.remainingChecks) return 0;
+    return 3 - (c === 'w' ? pos.remainingChecks.white : pos.remainingChecks.black);
+  }
+
+  /* ---------- Engine (UCI über Web Worker) ---------- */
+  function Engine(files) {
+    this.files = files; this.worker = null; this.job = null; this.chain = Promise.resolve();
+    this.ready = this.init(); this.ready.catch(function () {});
+  }
+  Engine.prototype.init = async function () {
+    var lastErr = null;
+    for (var i = 0; i < this.files.length; i++) {
+      try { this.worker = await this.boot(this.files[i]); return; } catch (e) { lastErr = e; }
+    }
+    throw lastErr || new Error('Engine konnte nicht starten.');
+  };
+  Engine.prototype.boot = function (file) {
+    var self = this;
+    return new Promise(function (resolve, reject) {
+      var w, settled = false, timer;
+      function fail(err) {
+        if (settled) return;
+        settled = true; clearTimeout(timer);
+        try { w && w.terminate(); } catch (_) {}
+        reject(err);
+      }
+      try { w = new Worker(new URL(file, document.baseURI).href); } catch (e) { return fail(e); }
+      timer = setTimeout(function () { fail(new Error('Zeitüberschreitung beim Laden von ' + file)); }, /wasm/.test(file) || /lite/.test(file) ? 15000 : 40000);
+      w.onerror = function (e) { fail(new Error((e && e.message) || ('Worker-Fehler bei ' + file))); };
+      w.onmessage = function (ev) {
+        var line = String(ev.data);
+        if (settled) return;
+        if (line.indexOf('uciok') === 0) w.postMessage('isready');
+        else if (line.indexOf('readyok') === 0) {
+          settled = true; clearTimeout(timer);
+          w.onmessage = function (e) { self.onLine(String(e.data)); };
+          w.onerror = function (e) { self.fail(new Error((e && e.message) || 'Die Engine ist abgestürzt.')); };
+          resolve(w);
+        }
+      };
+      w.postMessage('uci');
+    });
+  };
+  Engine.prototype.send = function (cmd) { this.worker.postMessage(cmd); };
+  Engine.prototype.enqueue = function (fn) {
+    var self = this;
+    var p = this.chain.then(function () { return self.ready; }).then(fn);
+    this.chain = p.catch(function () {});
+    return p;
+  };
+  Engine.prototype.newGame = function (variant) {
+    var self = this;
+    return this.enqueue(function () {
+      if (variant) self.send('setoption name UCI_Variant value ' + variant);
+      self.send('ucinewgame');
+    });
+  };
+  Engine.prototype.search = function (moves, opts) {
+    var self = this;
+    return this.enqueue(function () {
+      return new Promise(function (resolve, reject) {
+        self.job = { resolve: resolve, reject: reject, cp: null, mate: null, depth: 0 };
+        // Wachhund: antwortet die Engine nicht, erst 'stop' senden, dann aufgeben statt ewig zu warten.
+        self.job.t1 = setTimeout(function () { try { self.send('stop'); } catch (_) {} }, opts.movetime + 8000);
+        self.job.t2 = setTimeout(function () { self.fail(new Error('Stockfish antwortet nicht mehr.')); }, opts.movetime + 20000);
+        self.send('position startpos' + (moves.length ? ' moves ' + moves.join(' ') : ''));
+        self.send('go movetime ' + opts.movetime);
+      });
+    });
+  };
+  Engine.prototype.onLine = function (line) {
+    var job = this.job;
+    if (!job) return;
+    if (line.indexOf('info') === 0 && line.indexOf(' score ') > -1 && !/lowerbound|upperbound/.test(line)) {
+      var m = line.match(/score (cp|mate) (-?\d+)/);
+      if (m) { if (m[1] === 'cp') { job.cp = +m[2]; job.mate = null; } else { job.mate = +m[2]; job.cp = null; } }
+      var d = line.match(/ depth (\d+)/);
+      if (d) job.depth = +d[1];
+    } else if (line.indexOf('bestmove') === 0) {
+      clearTimeout(job.t1); clearTimeout(job.t2);
+      this.job = null;
+      job.resolve({ best: line.split(/\s+/)[1], cp: job.cp, mate: job.mate, depth: job.depth });
+    }
+  };
+
+  // Laufende Suche abbrechen (z. B. bei Zurücknehmen); Stockfish liefert dann sofort 'bestmove'.
+  Engine.prototype.stop = function () { if (this.job && this.worker) this.send('stop'); };
+  Engine.prototype.fail = function (err) {
+    var job = this.job;
+    this.job = null;
+    if (job) { clearTimeout(job.t1); clearTimeout(job.t2); job.reject(err); }
+    else console.error(err);
+  };
+
+  var engines = {};
+  function stopAll() { Object.keys(engines).forEach(function (k) { engines[k].stop(); }); }
+  function engineFor(v) {
+    var kind = VARIANTS[v].engine;
+    if (!engines[kind]) engines[kind] = new Engine(ENGINES[kind]);
+    return engines[kind];
+  }
+
+  /* ---------- Zustand ---------- */
+  var cfg = { time: 800, eval: false, variant: 'chess' };
+  var S = {
+    gen: 0, variant: 'chess', pos: null, keys: [], entries: [], brain: null, legal: [], phase: 'loading', error: '',
+    entry: null, stamp: false, last: null, sheet: null, flipBoard: false, confirmNew: false, confirmVar: null,
+    eval: null
+  };
+
+  function uciHistory() { return S.entries.map(function (e) { return e.uci; }); }
+
+  function rebuild() {
+    S.pos = Ops.defaultPosition(S.variant);
+    S.keys = [posKey(S.pos)];
+    S.last = null;
+    S.entries.forEach(function (e) {
+      var m = legalMoves(S.pos).filter(function (x) { return x.uci === e.uci; })[0];
+      if (!m) throw new Error('Ungültiger Zug im Verlauf: ' + e.uci);
+      S.pos.play(m.move);
+      S.keys.push(posKey(S.pos));
+      S.last = [m.from, m.to];
+    });
+  }
+
+  /* ---------- Spielablauf ---------- */
+  function newGame() {
+    S.gen++;
+    stopAll();
+    S.variant = cfg.variant;
+    S.entries = []; rebuild();
+    S.brain = null; S.legal = []; S.entry = null; S.error = ''; S.sheet = null;
+    S.confirmNew = false; S.confirmVar = null; S.eval = null;
+    var v = S.variant;
+    engineFor(v).newGame(VARIANTS[v].engine === 'mv' ? v : null);
+    beginTurn();
+  }
+
+  function repetitions() {
+    var k = S.keys[S.keys.length - 1], n = 0;
+    S.keys.forEach(function (x) { if (x === k) n++; });
+    return n;
+  }
+  function isOver() { return S.pos.isEnd() || repetitions() >= 3 || S.pos.halfmoves >= 100; }
+
+  function gameOverInfo() {
+    var pos = S.pos, w = null, title, sub;
+    if (pos.isVariantEnd()) {
+      var vo = pos.variantOutcome();
+      w = vo && vo.winner ? (vo.winner === 'white' ? 'w' : 'b') : null;
+      title = S.variant === 'atomic' ? 'König explodiert' : S.variant === '3check' ? 'Drittes Schach' : 'Partie vorbei';
+    } else if (pos.isCheckmate()) {
+      w = turnOf(pos) === 'w' ? 'b' : 'w'; title = 'Schachmatt';
+    } else if (pos.isStalemate()) { title = 'Patt'; sub = 'Unentschieden'; }
+    else if (pos.isInsufficientMaterial()) { title = 'Remis'; sub = 'Zu wenig Material'; }
+    else if (repetitions() >= 3) { title = 'Remis'; sub = 'Dreifache Stellungswiederholung'; }
+    else if (pos.halfmoves >= 100) { title = 'Remis'; sub = '50-Züge-Regel'; }
+    else { title = 'Remis'; sub = 'Unentschieden'; }
+    if (w) sub = colorName(w) + ' gewinnt';
+    return { title: title, sub: sub, winner: w, score: w ? (w === 'w' ? '1–0' : '0–1') : '½–½' };
+  }
+
+  async function beginTurn() {
+    var gen = S.gen, pos = S.pos;
+    if (isOver()) {
+      var info = gameOverInfo();
+      var last0 = S.entries[S.entries.length - 1];
+      if (last0 && last0.loss == null) {
+        var ev = info.winner && last0.color === info.winner ? 1000 : 0;
+        last0.loss = Math.max(0, clampCp({ cp: last0.bestScoreCp, mate: last0.bestScoreMate }) - ev);
+      }
+      S.eval = { over: info.score, frac: info.winner ? (info.winner === 'w' ? 1 : 0) : .5 };
+      S.phase = 'over'; S.brain = null; S.entry = null; render();
+      return;
+    }
+    S.phase = 'thinking'; S.entry = null; render();
+    var res;
+    try { res = await engineFor(S.variant).search(uciHistory(), { movetime: cfg.time }); }
+    catch (err) { if (gen === S.gen) fatal(err); return; }
+    if (gen !== S.gen) return;
+
+    var last = S.entries[S.entries.length - 1];
+    if (last && last.loss == null) {
+      last.loss = Math.max(0, clampCp({ cp: last.bestScoreCp, mate: last.bestScoreMate }) - (-clampCp(res)));
+    }
+    var sgn = turnOf(pos) === 'w' ? 1 : -1;
+    S.eval = { cp: res.cp != null ? sgn * res.cp : null, mate: res.mate != null ? sgn * res.mate : null };
+    var legalAll = legalMoves(pos);
+    var bm = legalAll.filter(function (m) { return m.uci === res.best; })[0] || legalAll[0];
+    S.brain = { type: bm.type, best: bm.uci, bestSan: Ops.makeSan(pos, bm.move), cp: res.cp, mate: res.mate };
+    S.legal = legalAll.filter(function (m) { return m.type === S.brain.type; });
+    S.entry = null; S.stamp = true; S.phase = 'hand';
+    try { if (navigator.vibrate) navigator.vibrate(40); } catch (_) {}
+    render();
+  }
+
+  function commitMove(m) {
+    var color = turnOf(S.pos);
+    var san = Ops.makeSan(S.pos, m.move);
+    S.pos.play(m.move);
+    S.keys.push(posKey(S.pos));
+    var hit = m.uci === S.brain.best;
+    S.entries.push({
+      color: color, san: san, uci: m.uci, bestUci: S.brain.best, bestSan: S.brain.bestSan,
+      bestScoreCp: S.brain.cp, bestScoreMate: S.brain.mate, hit: hit, loss: hit ? 0 : null
+    });
+    S.last = [m.from, m.to];
+    S.brain = null; S.legal = []; S.entry = null;
+    beginTurn();
+  }
+
+  function undo() {
+    if (!S.entries.length) return;
+    S.gen++;
+    stopAll();
+    S.entries.pop();
+    rebuild();
+    S.brain = null; S.legal = []; S.entry = null; S.sheet = null;
+    beginTurn();
+  }
+
+  function fatal(err) {
+    S.phase = 'error';
+    S.error = (err && err.message) ? err.message : String(err);
+    render();
+  }
+
+  /* ---------- Bewertung (aus Sicht von Weiß) ---------- */
+  function evalFrac() {
+    var e = S.eval;
+    if (!e) return .5;
+    if (e.over != null) return e.frac;
+    if (e.mate != null) return e.mate > 0 ? 1 : 0;
+    if (e.cp == null) return .5;
+    var f = 1 / (1 + Math.exp(-0.00368208 * e.cp));
+    return Math.max(.04, Math.min(.96, f));
+  }
+  function evalText() {
+    var e = S.eval;
+    if (!e) return '–';
+    if (e.over != null) return e.over;
+    if (e.mate != null) return (e.mate > 0 ? '+' : '−') + 'M' + Math.abs(e.mate);
+    if (e.cp == null) return '–';
+    return (e.cp > 0 ? '+' : e.cp < 0 ? '−' : '') + fmt(Math.abs(e.cp));
+  }
+
+  /* ---------- Darstellung ---------- */
+  function glyphSvg(type, cls) {
+    return '<svg class="' + (cls || 'glyph') + '" viewBox="0 0 100 100" aria-hidden="true"><text class="bigpc" x="50" y="53">' + GLYPH[type] + '</text></svg>';
+  }
+  function miniChip(type) {
+    return '<span class="mini">' + glyphSvg(type, '') + NAME[type] + '</span>';
+  }
+  function stats(c) {
+    var es = S.entries.filter(function (e) { return e.color === c; });
+    return { hits: es.filter(function (e) { return e.hit; }).length, n: es.length };
+  }
+  function sqSort(a, b) { return a[0] === b[0] ? (a[1] < b[1] ? -1 : 1) : (a[0] < b[0] ? -1 : 1); }
+  function uniq(a) { return a.filter(function (x, i) { return a.indexOf(x) === i; }); }
+
+  function revealHtml(c) {
+    var last = S.entries[S.entries.length - 1];
+    if (!last || last.color !== c) return '';
+    if (last.hit) {
+      return '<div class="reveal hit"><div class="rt">✓ Gedanken gelesen</div><div class="rs"><code>' + sanDe(last.san) + '</code> war auch Stockfishs Zug.</div></div>';
+    }
+    return '<div class="reveal miss"><div class="rt">Stockfish wollte <code>' + sanDe(last.bestSan) + '</code></div>' +
+      '<div class="rs">Gespielt: <code>' + sanDe(last.san) + '</code>' + (last.loss != null && last.loss >= 5 ? ' · kostet ' + fmt(last.loss) + ' Bauern' : '') + '</div></div>';
+  }
+
+  function entryHtml(c) {
+    var en = S.entry, h = '<div class="entry"><div class="ehead">' + miniChip(S.brain.type) +
+      '<button class="back" type="button" data-act="back">Zurück</button></div>';
+    if (en.promo) {
+      h += '<div class="elabel">Umwandeln in</div><div class="chips">';
+      en.promo.forEach(function (m) {
+        h += '<button class="chip pg" type="button" data-act="promo" data-p="' + m.promotion + '"><span>' + GLYPH[m.promotion] + '</span>' + NAME[m.promotion] + '</button>';
+      });
+      h += '</div>';
+    } else if (!en.from) {
+      var origins = uniq(S.legal.map(function (m) { return m.from; })).sort(sqSort);
+      h += '<div class="elabel">Von welchem Feld hast du gezogen?</div><div class="chips">';
+      origins.forEach(function (sq) { h += '<button class="chip" type="button" data-act="from" data-sq="' + sq + '">' + sq + '</button>'; });
+      h += '</div>';
+    } else {
+      var seen = {}, targets = S.legal.filter(function (m) { return m.from === en.from; }).filter(function (m) {
+        if (seen[m.to]) return false; seen[m.to] = 1; return true;
+      }).sort(function (a, b) { return sqSort(a.to, b.to); });
+      h += '<div class="elabel">Von <b>' + en.from + '</b> nach …</div><div class="chips">';
+      targets.forEach(function (m) {
+        var extra = m.castle ? '<small>Rochade</small>'
+          : m.ep ? '<small>e.p.</small>'
+          : (m.capture ? '<small>' + (S.variant === 'atomic' ? 'Explosion' : 'schlägt') + '</small>' : '');
+        h += '<button class="chip" type="button" data-act="to" data-sq="' + m.to + '">' + m.to + extra + '</button>';
+      });
+      h += '</div>';
+    }
+    return h + '</div>';
+  }
+
+  function pipsHtml(c) {
+    if (S.variant !== '3check') return '';
+    var n = checksGiven(S.pos, c), h = '<span class="pips" title="Schachgebote: ' + n + ' von 3">';
+    for (var i = 0; i < 3; i++) h += '<i class="' + (i < n ? 'on' : '') + '">+</i>';
+    return h + '</span>';
+  }
+
+  function halfHtml(c) {
+    var s = stats(c), turn = turnOf(S.pos);
+    var head = '<header class="hhead"><span class="who"><i class="dot ' + c + '"></i>' + colorName(c) + pipsHtml(c) + '</span>' +
+      '<span class="score">' + (cfg.eval ? '<span class="ev' + (S.phase === 'thinking' ? ' stale' : '') + '" title="Bewertung aus Sicht von Weiß">' + evalText() + '</span>' : '') + '<span>Gelesen <b>' + s.hits + '/' + s.n + '</b></span></span></header>';
+    var body;
+    var active = turn === c;
+    var vt = VARIANTS[S.variant].tag;
+    if (S.phase === 'error') {
+      body = '<div class="wait"><div class="big">Stockfish nicht verfügbar</div><div class="sub">' + esc(S.error || 'Die Engine konnte nicht geladen werden.') + '</div>' +
+        '<button class="cta" type="button" data-act="reload">Neu laden</button></div>';
+    } else if (S.phase === 'over') {
+      var info = gameOverInfo();
+      body = '<div class="wait over"><div class="res">' + info.score + '</div><div class="big">' + info.title + '</div><div class="sub">' + info.sub + '</div>' +
+        revealHtml(c) + '<button class="cta" type="button" data-act="new">Neue Partie' + (vt ? ' · ' + VARIANTS[S.variant].label : '') + '</button></div>';
+    } else if (S.phase === 'loading' || (S.phase === 'thinking' && active)) {
+      body = '<div class="wait"><div class="dots"><b></b><b></b><b></b></div><div class="big">' + (S.phase === 'loading' ? 'Stockfish startet' : 'Brain denkt') + '</div>' +
+        '<div class="sub">' + (S.phase === 'loading' ? 'Die Engine wird geladen.' : colorName(c) + ' wartet auf die Ansage.') + '</div></div>';
+    } else if (active && S.brain) {
+      if (S.entry) body = entryHtml(c);
+      else {
+        body = '<div class="stage"><div class="plabel">Brain sagt an · Zug ' + (Math.floor(S.entries.length / 2) + 1) + (vt ? ' · ' + VARIANTS[S.variant].label : '') + '</div>' +
+          glyphSvg(S.brain.type, 'glyph' + (S.stamp ? ' stamp' : '')) + '<div class="pname">' + NAME[S.brain.type] + '</div></div>' +
+          '<button class="cta" type="button" data-act="enter">Zug eingeben</button>';
+      }
+    } else {
+      body = '<div class="wait"><div class="big">' + colorName(turn) + ' ist am Zug</div>' +
+        (S.brain ? miniChip(S.brain.type) : '<div class="dots"><b></b><b></b><b></b></div>') + revealHtml(c) + '</div>';
+    }
+    return head + body;
+  }
+
+  function boardHtml(flipped) {
+    var h = '', r, c, sq;
+    function name(c, r) { return flipped ? FILES[7 - c] + (r + 1) : FILES[c] + (8 - r); }
+    for (r = 0; r < 8; r++) for (c = 0; c < 8; c++) {
+      sq = name(c, r);
+      h += '<rect x="' + c + '" y="' + r + '" width="1" height="1" class="' + (((c + r) % 2 === 0) ? 'l' : 'd') + '"/>';
+      if (S.last && (S.last[0] === sq || S.last[1] === sq)) h += '<rect x="' + c + '" y="' + r + '" width="1" height="1" class="last"/>';
+    }
+    for (r = 0; r < 8; r++) for (c = 0; c < 8; c++) {
+      sq = name(c, r);
+      var onL = ((c + r) % 2 === 0);
+      if (c === 0) h += '<text class="coord ' + (onL ? 'on-l' : 'on-d') + '" x="' + (c + .05) + '" y="' + (r + .22) + '">' + sq[1] + '</text>';
+      if (r === 7) h += '<text class="coord ' + (onL ? 'on-l' : 'on-d') + '" x="' + (c + .95) + '" y="' + (r + .94) + '" text-anchor="end">' + sq[0] + '</text>';
+      var p = pieceAt(S.pos, sq);
+      if (p) h += '<text class="pc ' + p.color + '" x="' + (c + .5) + '" y="' + (r + .54) + '" font-size=".84">' + GLYPH[p.type] + '</text>';
+    }
+    return '<div class="bwrap"><svg viewBox="0 0 8 8" role="img" aria-label="Aktuelle Stellung">' + h + '</svg></div>';
+  }
+
+  function ledgerHtml() {
+    if (!S.entries.length) return '<p class="none">Noch kein Zug gespielt.</p>';
+    function cell(e) {
+      if (!e) return '<div class="mv"></div>';
+      var tag = e.hit ? '<span class="tag hit">✓ gelesen</span>'
+        : '<span class="tag miss">Brain: ' + sanDe(e.bestSan) + (e.loss != null && e.loss >= 5 ? ' · −' + fmt(e.loss) : '') + '</span>';
+      return '<div class="mv"><span class="san">' + sanDe(e.san) + '</span>' + tag + '</div>';
+    }
+    var h = '';
+    for (var i = 0; i < S.entries.length; i += 2) {
+      h += '<div class="mrow"><span class="no">' + (i / 2 + 1) + '.</span>' + cell(S.entries[i]) + cell(S.entries[i + 1]) + '</div>';
+    }
+    return h;
+  }
+
+  function sheetHtml() {
+    if (S.sheet === 'board') {
+      return '<div class="panel"><header><h2>Stellung</h2><button class="close" type="button" data-act="menu">Zurück</button></header>' +
+        (cfg.eval
+          ? '<div class="bflex"><div class="evmini' + (S.flipBoard ? ' flip' : '') + '" aria-hidden="true"><div class="ew" style="height:' + (evalFrac() * 100).toFixed(1) + '%"></div></div>' + boardHtml(S.flipBoard) + '</div>' +
+            '<p class="evcap">Bewertung: ' + evalText() + ' (aus Sicht von Weiß)</p>'
+          : boardHtml(S.flipBoard)) +
+        '<div class="pbtns" style="margin-top:12px"><button class="pbtn" type="button" data-act="flip">Brett drehen</button></div>' +
+        '<p class="hintp">Nur zum Abgleichen mit dem echten Brett. Stimmt etwas nicht, nimm den letzten Zug zurück und gib ihn neu ein.</p></div>';
+    }
+    var tm = [[400, 'Kurz'], [800, 'Normal'], [2000, 'Lang']].map(function (t) {
+      return '<button type="button" data-act="time" data-v="' + t[0] + '" aria-pressed="' + (cfg.time === t[0]) + '">' + t[1] + '</button>';
+    }).join('');
+    var vs = VORDER.map(function (v) {
+      var label = S.confirmVar === v ? 'Neu starten?' : VARIANTS[v].label;
+      return '<button type="button" data-act="variant" data-v="' + v + '" aria-pressed="' + (S.variant === v) + '"' + (S.confirmVar === v ? ' class="warn"' : '') + '>' + label + '</button>';
+    }).join('');
+    var running = S.entries.length && S.phase !== 'over';
+    return '<div class="panel"><header><h2>Menü</h2><button class="close" type="button" data-act="close">Schließen</button></header>' +
+      '<h3 style="margin-top:0">Variante</h3><div class="seg">' + vs + '</div>' +
+      '<p class="hintp">' + VARIANTS[S.variant].hint + (running ? ' Ein Wechsel startet eine neue Partie.' : '') + '</p>' +
+      '<div class="pbtns" style="margin-top:16px">' +
+      '<button class="pbtn" type="button" data-act="undo"' + (S.entries.length ? '' : ' disabled') + '>Letzten Zug zurücknehmen</button>' +
+      '<button class="pbtn" type="button" data-act="board">Stellung prüfen</button>' +
+      '<button class="pbtn danger" type="button" data-act="new">' + (S.confirmNew ? 'Wirklich neu starten?' : 'Neue Partie') + '</button></div>' +
+      '<h3>Denkzeit des Brains</h3><div class="seg">' + tm + '</div>' +
+      '<h3>Bewertungsbalken</h3><div class="seg">' +
+      '<button type="button" data-act="eval" data-v="0" aria-pressed="' + !cfg.eval + '">Aus</button>' +
+      '<button type="button" data-act="eval" data-v="1" aria-pressed="' + !!cfg.eval + '">An</button></div>' +
+      '<p class="hintp">Zeigt Stockfishs Einschätzung der aktuellen Stellung am Bildschirmrand. Weiß wächst von unten, Schwarz von oben.</p>' +
+      '<h3>Protokoll</h3>' + ledgerHtml() +
+      '<p class="credit">Brain: <a href="https://stockfishchess.org" target="_blank" rel="noopener">Stockfish 19</a> (GPLv3) als WebAssembly über ' +
+      '<a href="https://github.com/nmrugg/stockfish.js" target="_blank" rel="noopener">stockfish.js</a>. Atomic und Dreischach: Multi-Variant-Stockfish von Daniel Dugovic, kompiliert von ' +
+      '<a href="https://github.com/niklasf/stockfish.js" target="_blank" rel="noopener">Niklas Fiekas</a> (GPLv3). Regeln: chessops. Alles läuft in deinem Browser.</p></div>';
+  }
+
+  function render() {
+    if (!S.pos) return;
+    $('hw').innerHTML = halfHtml('w');
+    $('hb').innerHTML = halfHtml('b');
+    var vt = VARIANTS[S.variant].tag;
+    $('btnMenu').textContent = 'Menü · ' + (vt ? vt + ' · ' : '') + 'Zug ' + (Math.floor(S.entries.length / 2) + 1);
+    S.stamp = false;
+    var sh = $('sheet');
+    if (S.sheet) { sh.innerHTML = sheetHtml(); sh.hidden = false; } else { sh.hidden = true; sh.innerHTML = ''; }
+    var eb = $('evalbar');
+    eb.hidden = !cfg.eval;
+    eb.classList.toggle('stale', S.phase === 'thinking');
+    $('app').classList.toggle('with-eval', !!cfg.eval);
+    $('evalW').style.height = (evalFrac() * 100).toFixed(1) + '%';
+    eb.setAttribute('aria-label', 'Bewertung ' + evalText() + ' aus Sicht von Weiß');
+  }
+
+  /* ---------- Eingaben ---------- */
+  var wake = null;
+  function keepAwake() {
+    try {
+      if (navigator.wakeLock && !wake) {
+        navigator.wakeLock.request('screen').then(function (l) { wake = l; l.addEventListener('release', function () { wake = null; }); }).catch(function () {});
+      }
+    } catch (_) {}
+  }
+
+  var confirmTimer = null;
+  function armConfirm(fn) {
+    fn(); clearTimeout(confirmTimer);
+    confirmTimer = setTimeout(function () { S.confirmNew = false; S.confirmVar = null; if (S.sheet === 'menu') render(); }, 3500);
+  }
+  document.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-act]');
+    if (e.target === $('sheet')) { S.sheet = null; render(); return; }
+    if (!b) return;
+    keepAwake();
+    var act = b.getAttribute('data-act');
+    var sq = b.getAttribute('data-sq');
+    switch (act) {
+      case 'enter': S.entry = { from: null }; break;
+      case 'back':
+        if (S.entry && S.entry.promo) S.entry = { from: S.entry.from };
+        else if (S.entry && S.entry.from) S.entry = { from: null };
+        else S.entry = null;
+        break;
+      case 'from': S.entry = { from: sq }; break;
+      case 'to': {
+        var cands = S.legal.filter(function (m) { return m.from === S.entry.from && m.to === sq; });
+        if (cands.length > 1) { S.entry = { from: S.entry.from, to: sq, promo: cands }; break; }
+        if (cands[0]) { commitMove(cands[0]); return; }
+        break;
+      }
+      case 'promo': {
+        var pick = S.entry.promo.filter(function (m) { return m.promotion === b.getAttribute('data-p'); })[0];
+        if (pick) { commitMove(pick); return; }
+        break;
+      }
+      case 'menu': S.sheet = 'menu'; break;
+      case 'close': S.sheet = null; break;
+      case 'board': S.sheet = 'board'; break;
+      case 'flip': S.flipBoard = !S.flipBoard; break;
+      case 'undo': undo(); return;
+      case 'reload': location.reload(); return;
+      case 'time': cfg.time = +b.getAttribute('data-v'); break;
+      case 'eval': cfg.eval = b.getAttribute('data-v') === '1'; break;
+      case 'variant': {
+        var v = b.getAttribute('data-v');
+        if (v === S.variant) break;
+        if (S.phase === 'over' || !S.entries.length || S.confirmVar === v) { cfg.variant = v; newGame(); S.sheet = 'menu'; render(); return; }
+        armConfirm(function () { S.confirmVar = v; S.confirmNew = false; });
+        break;
+      }
+      case 'new':
+        if (S.phase === 'over' || !S.entries.length || S.confirmNew) { cfg.variant = S.variant; newGame(); return; }
+        armConfirm(function () { S.confirmNew = true; S.confirmVar = null; });
+        break;
+    }
+    render();
+  });
+  document.addEventListener('visibilitychange', function () { if (document.visibilityState === 'visible') keepAwake(); });
+
+  function snapshot() {
+    return {
+      cfg: cfg, variant: S.variant,
+      entries: S.entries.map(function (e) { return { u: e.uci, bu: e.bestUci, bs: e.bestSan, sc: e.bestScoreCp, sm: e.bestScoreMate, h: e.hit, l: e.loss }; })
+    };
+  }
+
+  function start(data) {
+    data = data || {};
+    if (data.cfg) cfg = Object.assign(cfg, data.cfg);
+    if (!VARIANTS[cfg.variant]) cfg.variant = 'chess';
+    var restored = false;
+    if (data.entries && data.entries.length) {
+      try {
+        S.variant = VARIANTS[data.variant] ? data.variant : 'chess';
+        S.entries = [];
+        var pos = Ops.defaultPosition(S.variant);
+        data.entries.forEach(function (e) {
+          var m = legalMoves(pos).filter(function (x) { return x.uci === e.u; })[0];
+          if (!m) throw new Error('bad');
+          var san = Ops.makeSan(pos, m.move);
+          S.entries.push({ color: turnOf(pos), san: san, uci: e.u, bestUci: e.bu, bestSan: e.bs, bestScoreCp: e.sc, bestScoreMate: e.sm, hit: e.h, loss: e.l });
+          pos.play(m.move);
+        });
+        rebuild();
+        var v = S.variant;
+        engineFor(v).newGame(VARIANTS[v].engine === 'mv' ? v : null);
+        restored = true;
+        beginTurn();
+      } catch (_) { S.entries = []; }
+    }
+    if (!restored) newGame();
+    var hot = window.claude && window.claude.hot;
+    if (hot && hot.snapshot) hot.snapshot(snapshot);
+  }
+
+  var hot = window.claude && window.claude.hot;
+  if (hot && hot.ready) hot.ready(start); else start(hot && hot.data ? hot.data : {});
+})();
+</script>
+</body>
+</html>
+
+</body></html>
